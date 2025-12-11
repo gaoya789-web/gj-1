@@ -10,6 +10,11 @@ import { Language } from './types';
 // Lightweight inline fallback avatar to avoid CORS/image load failures during export
 const FALLBACK_AVATAR = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" fill="none"><rect width="160" height="160" rx="24" fill="%23E5E7EB"/><circle cx="80" cy="64" r="32" fill="%239CA3AF"/><path d="M32 144c0-26.51 21.49-48 48-48s48 21.49 48 48" stroke="%239CA3AF" stroke-width="12" stroke-linecap="round"/></svg>';
 
+// Export tuning to keep PDF/PNG consistent with on-screen preview
+const EXPORT_WIDTH = 1280;   // force a stable desktop layout width
+const EXPORT_PADDING = 50;   // generous whitespace to match preview background
+const EXPORT_SCALE = 2;      // hi-dpi without blowing up memory
+
 // Helper component for copyable contact rows
 const CopyRow = ({ icon, text }: { icon: React.ReactNode, text: string }) => {
   const [copied, setCopied] = useState(false);
@@ -62,23 +67,28 @@ const App: React.FC = () => {
     try {
       // Small delay to ensure UI is stable
       await new Promise(resolve => setTimeout(resolve, 100));
+      // Wait for webfonts to be ready to avoid fallback fonts in export
+      if ((document as any).fonts?.ready) {
+        await (document as any).fonts.ready;
+      }
 
-      const baseWidth = contentRef.current.scrollWidth || 1280;
-      const maxExportWidth = 2480; // Cap to avoid huge canvases on very wide screens
-      const exportScale = Math.min(2, maxExportWidth / baseWidth);
+      const exportWidth = EXPORT_WIDTH;
 
       const canvas = await html2canvas(contentRef.current, {
-        scale: exportScale, // High resolution with upper bound
+        scale: EXPORT_SCALE,
         useCORS: true,
         backgroundColor: '#F5F5F7', // Preserve the gray background of the resume layout
         logging: false,
-        windowWidth: Math.min(1280, baseWidth), // Avoid oversizing the virtual viewport
+        windowWidth: exportWidth, // lock layout width for consistent rendering
         onclone: (clonedDoc) => {
           const element = clonedDoc.getElementById('resume-content');
+          clonedDoc.body.style.backgroundColor = '#F5F5F7';
           if (element) {
              // Add generous padding to the cloned element to create natural whitespace
              // This expands the background area without adding a "fake" border
-             element.style.padding = '50px';
+             element.style.width = `${exportWidth}px`;
+             element.style.margin = '0 auto';
+             element.style.padding = `${EXPORT_PADDING}px`;
              element.style.maxWidth = 'none'; // Ensure it can expand if needed
           }
         }
@@ -107,12 +117,17 @@ const App: React.FC = () => {
         pdf.save(`Gao_Jie_Resume_${lang}.pdf`);
 
       } else {
-        // PNG Export
-        // The canvas already has the extra padding and gray background from the onclone step
+        // PNG Export (use Blob + object URL to avoid blank-tab navigation issues on some hosts)
+        const blob: Blob | null = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) throw new Error('Failed to generate PNG blob');
+        const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png');
+        link.href = url;
         link.download = `Gao_Jie_Resume_${lang}.png`;
+        document.body.appendChild(link);
         link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
       }
 
     } catch (error) {
